@@ -2,13 +2,36 @@
   "name": "GKI-Kernel-Forge",
   "build": {
     "dockerfile": ".devcontainer/Dockerfile",
-    "context": ".."
+    "context": "..",
+    "args": {
+      "DEBIAN_FRONTEND": "noninteractive"
+    }
   },
   "customizations": {
     "vscode": {
-      "extensions": ["ms-vscode.cpptools", "ms-vscode.cmake-tools"]
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools",
+        "ms-vscode.makefile-tools",
+        "eamodio.gitlens",
+        "ms-vscode-remote.remote-containers"
+      ],
+      "settings": {
+        "C_Cpp.default.compilerPath": "/usr/bin/clang-14",
+        "makefile.configureOnOpen": true,
+        "files.exclude": {
+          "out/**": false,
+          "**/.*": true
+        }
+      }
     }
   },
   "remoteUser": "vscode",
-  "workspaceFolder": "/workspaces/GKI-Custom"
+  "workspaceFolder": "/workspaces/GKI-Custom",
+  "postCreateCommand": "chmod +x scripts/*.sh && bash scripts/setup-env.sh",
+  "mounts": [],
+  "forwardPorts": [],
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  }
 }

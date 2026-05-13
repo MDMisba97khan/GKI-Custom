@@ -49,8 +49,8 @@ jobs:
       - name: Install Build Dependencies
         run: |
           echo "Installing build tools..."
-          sudo apt-get update -qq
-          sudo apt-get install -y \
+          sudo -S -p '' apt-get update -qq
+          sudo -S -p '' apt-get install -y \
             build-essential bison flex libssl-dev libelf-dev \
             pkg-config python3 python3-pip git curl wget unzip lz4 zstd bc \
             aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils \
@@ -214,8 +214,8 @@ jobs:
 
       - name: Setup Build Environment
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y build-essential bison flex libssl-dev libelf-dev \
+          sudo -S -p '' apt-get update -qq
+          sudo -S -p '' apt-get install -y build-essential bison flex libssl-dev libelf-dev \
             pkg-config aarch64-linux-gnu-gcc aarch64-linux-gnu-binutils \
             clang-14 llvm-14 2>&1 | tail -5
 
@@ -238,10 +238,10 @@ jobs:
           export LD=ld.lld-14
           
           make \
-            CC=${CC} \
-            CROSS_COMPILE=${CROSS_COMPILE} \
+            CC=\${CC} \
+            CROSS_COMPILE=\${CROSS_COMPILE} \
             EXTRA_CFLAGS="-DCONFIG_WIFI_MONITOR=1 -DCONFIG_CONCURRENT_MODE=1" \
-            -j$(nproc) 2>&1 | tail -50 || echo "⚠ Build completed"
+            -j\$(nproc) 2>&1 | tail -50 || echo "⚠ Build completed"
 
       - name: Verify Compiled Binaries
         run: |
@@ -280,13 +280,13 @@ jobs:
       - name: Create Module Structure
         run: |
           MODULE_DIR=~/build/KSU_Omni_WiFi
-          mkdir -p ${MODULE_DIR}/{system/lib/modules,system/etc/firmware,common}
+          mkdir -p \${MODULE_DIR}/{system/lib/modules,system/etc/firmware,common}
           echo "Module directory structure created"
 
       - name: Create module.prop
         run: |
           MODULE_DIR=~/build/KSU_Omni_WiFi
-          cat > ${MODULE_DIR}/module.prop << 'PROPEOF'
+          cat > \${MODULE_DIR}/module.prop << 'PROPEOF'
           id=KSU_Omni_WiFi
           name=KernelSU Omni WiFi Pack
           version=1.0.0
@@ -295,68 +295,67 @@ jobs:
           description=Enable Monitor Mode and Packet Injection for Realme Note 50 (RMX3834)
           PROPEOF
           
-          cat ${MODULE_DIR}/module.prop
+          cat \${MODULE_DIR}/module.prop
 
       - name: Copy Compiled Drivers
         run: |
           MODULE_DIR=~/build/KSU_Omni_WiFi
           
           if [ -f ~/build/compiled-drivers/8812au/rtl8812au.ko ]; then
-            cp ~/build/compiled-drivers/8812au/rtl8812au.ko ${MODULE_DIR}/system/lib/modules/
+            cp ~/build/compiled-drivers/8812au/rtl8812au.ko \${MODULE_DIR}/system/lib/modules/
             echo "✓ rtl8812au.ko copied"
-            ls -lh ${MODULE_DIR}/system/lib/modules/
+            ls -lh \${MODULE_DIR}/system/lib/modules/
           else
             echo "⚠ rtl8812au.ko not found"
-            touch ${MODULE_DIR}/system/lib/modules/rtl8812au.ko.placeholder
+            touch \${MODULE_DIR}/system/lib/modules/rtl8812au.ko.placeholder
           fi
 
       - name: Download Firmware
         run: |
           MODULE_DIR=~/build/KSU_Omni_WiFi
-          FW_DIR=${MODULE_DIR}/system/etc/firmware
-          cd ${FW_DIR}
+          FW_DIR=\${MODULE_DIR}/system/etc/firmware
+          cd \${FW_DIR}
           
           if wget -q --timeout=30 \
             "https://github.com/morrownr/8812au-20210629/raw/main/firmware/rtl8812aufw.bin" \
             -O rtl8812au_fw.bin 2>/dev/null; then
             echo "✓ rtl8812au_fw.bin downloaded"
+            ls -lh \${FW_DIR}
           else
             echo "⚠ Firmware download failed"
             touch rtl8812au_fw.bin.placeholder
           fi
-          
-          ls -lh ${FW_DIR}
 
       - name: Create Boot Scripts
         run: |
           MODULE_DIR=~/build/KSU_Omni_WiFi
           
-          cat > ${MODULE_DIR}/common/service.sh << 'SERVICEEOF'
+          cat > \${MODULE_DIR}/common/service.sh << 'SERVICEEOF'
           #!/system/bin/sh
-          MODPATH=${0%/*}
-          MODULES_DIR=${MODPATH}/system/lib/modules
-          for ko_file in ${MODULES_DIR}/*.ko; do
-            [ -f "${ko_file}" ] && insmod "${ko_file}"
+          MODPATH=\${0%/*}
+          MODULES_DIR=\${MODPATH}/system/lib/modules
+          for ko_file in \${MODULES_DIR}/*.ko; do
+            [ -f "\${ko_file}" ] && insmod "\${ko_file}"
           done
           SERVICEEOF
           
-          chmod +x ${MODULE_DIR}/common/service.sh
+          chmod +x \${MODULE_DIR}/common/service.sh
           
-          cat > ${MODULE_DIR}/install.sh << 'INSTALLEOF'
+          cat > \${MODULE_DIR}/install.sh << 'INSTALLEOF'
           #!/system/bin/sh
-          MODDIR=${0%/*}
-          chmod 0644 ${MODDIR}/system/lib/modules/*.ko 2>/dev/null
-          chmod 0644 ${MODDIR}/system/etc/firmware/*.bin 2>/dev/null
+          MODDIR=\${0%/*}
+          chmod 0644 \${MODDIR}/system/lib/modules/*.ko 2>/dev/null
+          chmod 0644 \${MODDIR}/system/etc/firmware/*.bin 2>/dev/null
           INSTALLEOF
           
-          chmod +x ${MODULE_DIR}/install.sh
+          chmod +x \${MODULE_DIR}/install.sh
           
           echo "Boot scripts created"
 
       - name: Create README
         run: |
           MODULE_DIR=~/build/KSU_Omni_WiFi
-          cat > ${MODULE_DIR}/README.md << 'READMEEOF'
+          cat > \${MODULE_DIR}/README.md << 'READMEEOF'
           # KernelSU Omni WiFi Pack
           
           ## Device
@@ -370,9 +369,6 @@ jobs:
           
           ## Supported Adapters
           - Alfa AWUS011ACS (RTL8812AU, USB ID: 0bda:c820)
-          - ATH9K_HTC
-          - RT2800USB
-          - RTL8187
           
           ## Installation
           1. Boot into Recovery with KernelSU-Next
@@ -392,21 +388,20 @@ jobs:
           GPL v2
           READMEEOF
           
-          cat ${MODULE_DIR}/README.md
+          cat \${MODULE_DIR}/README.md
 
       - name: Create Flashable ZIP
         run: |
           MODULE_DIR=~/build/KSU_Omni_WiFi
           OUTPUT_DIR=~/build/out
-          mkdir -p ${OUTPUT_DIR}
+          mkdir -p \${OUTPUT_DIR}
           
           cd ~/build
-          zip -r -q ${OUTPUT_DIR}/KSU_Omni_WiFi_Pack.zip KSU_Omni_WiFi/
+          zip -r -q \${OUTPUT_DIR}/KSU_Omni_WiFi_Pack.zip KSU_Omni_WiFi/
           
-          if [ -f ${OUTPUT_DIR}/KSU_Omni_WiFi_Pack.zip ]; then
-            ls -lh ${OUTPUT_DIR}/KSU_Omni_WiFi_Pack.zip
+          if [ -f \${OUTPUT_DIR}/KSU_Omni_WiFi_Pack.zip ]; then
+            ls -lh \${OUTPUT_DIR}/KSU_Omni_WiFi_Pack.zip
             echo "✓ ZIP created successfully"
-            unzip -l ${OUTPUT_DIR}/KSU_Omni_WiFi_Pack.zip | head -20
           else
             echo "✗ Failed to create ZIP"
             exit 1
@@ -415,15 +410,13 @@ jobs:
       - name: Generate Checksums
         run: |
           OUTPUT_DIR=~/build/out
-          cd ${OUTPUT_DIR}
+          cd \${OUTPUT_DIR}
           
           sha256sum KSU_Omni_WiFi_Pack.zip > KSU_Omni_WiFi_Pack.zip.sha256
           md5sum KSU_Omni_WiFi_Pack.zip > KSU_Omni_WiFi_Pack.zip.md5
           
-          echo "SHA256:"
-          cat KSU_Omni_WiFi_Pack.zip.sha256
-          echo "MD5:"
-          cat KSU_Omni_WiFi_Pack.zip.md5
+          echo "SHA256: $(cat KSU_Omni_WiFi_Pack.zip.sha256)"
+          echo "MD5: $(cat KSU_Omni_WiFi_Pack.zip.md5)"
 
       - name: Upload Final Artifact
         uses: actions/upload-artifact@v3
@@ -478,9 +471,6 @@ jobs:
     needs: [ environment_setup, source_acquisition, build_drivers, ksu_packaging ]
 
     steps:
-      - name: Download All Artifacts
-        uses: actions/download-artifact@v3
-
       - name: Generate Build Report
         run: |
           echo "## 📋 GKI Module Builder - Build Report" >> $GITHUB_STEP_SUMMARY
@@ -497,17 +487,3 @@ jobs:
           echo "- Phase 3 - Build Drivers: ${{ needs.build_drivers.result }}" >> $GITHUB_STEP_SUMMARY
           echo "- Phase 4 - KSU Packaging: ${{ needs.ksu_packaging.result }}" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          
-          echo "### 🔧 Target Specifications" >> $GITHUB_STEP_SUMMARY
-          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Device | Realme Note 50 (RMX3834) |" >> $GITHUB_STEP_SUMMARY
-          echo "| Kernel | 5.15.178-android13-8-g0ff3dab2ed1b-ab35 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Android | 15 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Architecture | aarch64 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Compiler | Clang 14.0.7 (r450784d) |" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-
-      - name: Final Status
-        run: |
-          echo "✅ Build Pipeline Complete"

@@ -1,0 +1,19 @@
+{
+  "name": "GKI-Kernel-Forge",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": ["ms-vscode.cpptools", "ms-vscode.cmake-tools"]
+    }
+  },
+  "remoteUser": "vscode",
+  "mounts": [
+    {
+      "source": "/home/kali",
+      "target": "/workspaces/GKI-Custom",
+      "type": "bind"
+    }
+  ]
+}

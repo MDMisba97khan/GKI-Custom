@@ -25,14 +25,15 @@ jobs:
           clang --version | head -1
           aarch64-linux-gnu-gcc --version | head -1
 
-      - name: Download RTL8812AU Driver Source
+      - name: Download RTL8812AU Driver Source (aircrack-ng)
         run: |
-          mkdir -p ~/build/drivers/rtl8812au
+          mkdir -p ~/build/drivers
           cd ~/build/drivers
-          echo "=== Downloading RTL8812AU source ==="
-          curl -L --retry 3 --retry-delay 5 \
-            "https://github.com/morrownr/8812au-20210629/archive/refs/heads/main.tar.gz" \
+          echo "=== Downloading RTL8812AU source (aircrack-ng) ==="
+          curl -L --retry 3 --retry-delay 10 \
+            "https://github.com/aircrack-ng/rtl8812au/archive/refs/heads/master.tar.gz" \
             -o rtl8812au.tar.gz
+          mkdir -p rtl8812au
           tar xzf rtl8812au.tar.gz --strip-components=1 -C rtl8812au/
           rm rtl8812au.tar.gz
           echo "=== Driver source extracted ==="
@@ -48,14 +49,13 @@ jobs:
 
       - name: Download Kernel Source
         run: |
-          mkdir -p ~/build/kernel_source
+          mkdir -p ~/build/kernel_source/kernel
           cd ~/build/kernel_source
           echo "=== Downloading kernel source ==="
-          curl -L --retry 3 --retry-delay 5 \
+          curl -L --retry 3 --retry-delay 10 \
             "https://github.com/${{ github.repository_owner }}/realme_C51_C53_Note50_C60_C51_N53-AndroidU-kernel-source/archive/refs/heads/main.tar.gz" \
             -o kernel.tar.gz
-          tar xzf kernel.tar.gz --strip-components=1 -C kernel/ 2>/dev/null || \
-          { mkdir -p kernel && tar xzf kernel.tar.gz --strip-components=1 -C kernel/; }
+          tar xzf kernel.tar.gz --strip-components=1 -C kernel/
           rm -f kernel.tar.gz
           echo "=== Kernel source extracted ==="
           ls ~/build/kernel_source/kernel/ | head -20

@@ -1,4 +1,4 @@
-name: GKI Module Builder Pipeline
+name: GKI WiFi Module Builder
 
 on:
   push:
@@ -7,152 +7,176 @@ on:
 
 jobs:
   build:
-    name: Build KernelSU WiFi Module
+    name: Build mac80211 + rtl8812au
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential bison flex libssl-dev libelf-dev \
             pkg-config python3 git curl wget unzip bc xz-utils \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            clang llvm lld
-          clang --version | head -1
-          aarch64-linux-gnu-gcc --version | head -1
+            clang-14 llvm-14 lld-14
+          clang-14 --version | head -1
 
-      - name: Download RTL8812AU Driver Source
-        run: |
-          mkdir -p ~/build/drivers
-          cd ~/build/drivers
-          echo "=== Downloading RTL8812AU source ==="
-          curl -L --retry 3 --retry-delay 10 -H "Accept: application/octet-stream" \
-            "https://github.com/aircrack-ng/rtl8812au/archive/refs/heads/master.tar.gz" \
-            -o rtl8812au.tar.gz
-          mkdir -p rtl8812au
-          tar xzf rtl8812au.tar.gz --strip-components=1 -C rtl8812au/
-          rm rtl8812au.tar.gz
-          echo "=== Driver source extracted ==="
-          ls ~/build/drivers/rtl8812au/
-
-      - name: Apply Monitor Mode Patches
-        run: |
-          cd ~/build/drivers/rtl8812au
-          echo "=== Applying monitor mode patches ==="
-          sed -i 's/CONFIG_WIFI_MONITOR = n/CONFIG_WIFI_MONITOR = y/g' Makefile || true
-          sed -i 's/# CONFIG_WIFI_MONITOR/CONFIG_WIFI_MONITOR = y/g' Makefile || true
-          grep "CONFIG_WIFI_MONITOR" Makefile || echo "CONFIG_WIFI_MONITOR not found"
-
-      - name: Checkout Kernel Source
+      - name: Clone Kernel Source
         uses: actions/checkout@v4
         with:
           repository: MDMisba97khan/realme_C51_C53_Note50_C60_C51_N53-AndroidU-kernel-source
-          path: kernel_source/kernel
+          path: kernel
           ref: master
           fetch-depth: 1
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Prepare Kernel Headers
+      - name: Clone RTL8812AU Driver
         run: |
-          cd kernel_source/kernel
-          echo "=== Preparing kernel headers ==="
+          mkdir -p drivers
+          curl -L --retry 3 --retry-delay 10 \
+            "https://github.com/aircrack-ng/rtl8812au/archive/refs/heads/master.tar.gz" \
+            -o rtl8812au.tar.gz
+          mkdir -p drivers/rtl8812au
+          tar xzf rtl8812au.tar.gz --strip-components=1 -C drivers/rtl8812au/
+          rm rtl8812au.tar.gz
+
+      - name: Prepare Kernel + Build mac80211 + cfg80211
+        run: |
+          cd kernel
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=clang
-          make ARCH=arm64 olddefconfig 2>&1 | tail -10 || echo "olddefconfig failed, continuing..."
-          make ARCH=arm64 modules_prepare 2>&1 | tail -20 || echo "modules_prepare failed, continuing..."
-          echo "=== Kernel headers prepared ==="
+          export CC=clang-14
+
+          # Find and use the correct defconfig
+          if [ -f "build.config.gki.aarch64" ]; then
+            # GKI build config - extract the config
+            KERNEL_DEFCONFIG=$(grep "KERNEL_DEFCONFIG" build.config.gki.aarch64 | cut -d= -f2 | tr -d ' ')
+            echo "Using defconfig: ${KERNEL_DEFCONFIG}"
+          fi
+
+          # Try available defconfigs
+          for cfg in gki_defconfig gki_unisoc.aarch64; do
+            if make ARCH=arm64 ${cfg} 2>/dev/null | tail -1; then
+              echo "Config: ${cfg}"
+              break
+            fi
+          done
+
+          # If no defconfig worked, try to use the config from the repo
+          if [ ! -f .config ]; then
+            # Look for any config file
+            find . -name ".config" -o -name "defconfig" 2>/dev/null | head -5
+            # Use sprd diffconfig
+            if [ -d "sprd-diffconfig" ]; then
+              echo "Found sprd-diffconfig"
+              ls sprd-diffconfig/
+            fi
+          fi
+
+          # Enable mac80211 and cfg80211 as modules
+          if [ -f .config ]; then
+            echo "CONFIG_MAC80211=m" >> .config
+            echo "CONFIG_CFG80211=m" >> .config
+            make ARCH=arm64 olddefconfig 2>&1 | tail -3
+            make ARCH=arm64 modules_prepare 2>&1 | tail -10
+          else
+            echo "WARNING: No .config found, trying direct build"
+          fi
+
+          # Build mac80211
+          echo "=== Building mac80211 ==="
+          make ARCH=arm64 CC=clang-14 CROSS_COMPILE=aarch64-linux-gnu- \
+            M=net/mac80211 modules 2>&1 | tail -20
+
+          # Build cfg80211
+          echo "=== Building cfg80211 ==="
+          make ARCH=arm64 CC=clang-14 CROSS_COMPILE=aarch64-linux-gnu- \
+            M=net/wireless modules 2>&1 | tail -20
+
+          echo "=== Kernel modules built ==="
+          find . -name "mac80211.ko" -o -name "cfg80211.ko" 2>/dev/null
 
       - name: Build RTL8812AU.ko
         run: |
-          cd ~/build/drivers/rtl8812au
-          echo "=== Building RTL8812AU.ko ==="
+          cd drivers/rtl8812au
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=clang
-          export KDIR=${GITHUB_WORKSPACE}/kernel_source/kernel
-          make \
-            ARCH=arm64 \
-            CROSS_COMPILE=aarch64-linux-gnu- \
-            CC=clang \
+          export CC=clang-14
+          export KDIR=${GITHUB_WORKSPACE}/kernel
+
+          echo "=== Building RTL8812AU ==="
+          make ARCH=arm64 CC=clang-14 CROSS_COMPILE=aarch64-linux-gnu- \
             KDIR=${KDIR} \
             EXTRA_CFLAGS="-DCONFIG_WIFI_MONITOR=1 -DCONFIG_CONCURRENT_MODE=1" \
-            -j$(nproc) 2>&1 | tail -60
-          echo "=== Build complete ==="
-          if [ -f "8812au.ko" ]; then
-            echo "✅ 8812au.ko built successfully!"
-            ls -lh 8812au.ko
-            file 8812au.ko
-          elif [ -f "rtl8812au.ko" ]; then
-            echo "✅ rtl8812au.ko built successfully!"
-            ls -lh rtl8812au.ko
-            file rtl8812au.ko
-          else
-            echo "❌ No .ko file found"
-            find . -name "*.ko" -type f 2>/dev/null
-          fi
+            -j$(nproc) 2>&1 | tail -40
 
-      - name: Package KernelSU Module
+          echo "=== RTL8812AU build result ==="
+          find . -name "*.ko" -type f 2>/dev/null
+
+      - name: Collect and Package
         run: |
-          echo "=== Packaging KernelSU-Next Module ==="
-          MODULE_DIR="${HOME}/build/KSU_Omni_WiFi"
+          mkdir -p collected
+          find kernel/ -name "mac80211.ko" -exec cp {} collected/ \; 2>/dev/null
+          find kernel/ -name "cfg80211.ko" -exec cp {} collected/ \; 2>/dev/null
+          find drivers/ -name "*.ko" -exec cp {} collected/ \; 2>/dev/null
+          echo "=== Collected .ko files ==="
+          ls -la collected/
+          for f in collected/*.ko; do file "$f"; done
+
+          MODULE_DIR="KSU_Omni_WiFi"
           mkdir -p "${MODULE_DIR}/system/lib/modules"
-          mkdir -p "${MODULE_DIR}/system/etc/firmware"
           mkdir -p "${MODULE_DIR}/common"
-          DRIVER_FILE=""
-          if [ -f "${HOME}/build/drivers/rtl8812au/8812au.ko" ]; then
-            DRIVER_FILE="${HOME}/build/drivers/rtl8812au/8812au.ko"
-          elif [ -f "${HOME}/build/drivers/rtl8812au/rtl8812au.ko" ]; then
-            DRIVER_FILE="${HOME}/build/drivers/rtl8812au/rtl8812au.ko"
-          fi
-          if [ -n "${DRIVER_FILE}" ]; then
-            cp "${DRIVER_FILE}" "${MODULE_DIR}/system/lib/modules/"
-            echo "✅ Driver copied"
-          else
-            echo "⚠️ No driver .ko found"
-          fi
-          printf 'id=KSU_Omni_WiFi\nname=KernelSU Omni WiFi Pack\nversion=1.0.0\nversionCode=1\nauthor=MDMisba97khan\ndescription=Enable Monitor Mode and Packet Injection for Realme Note 50 (RMX3834)\n' > "${MODULE_DIR}/module.prop"
-          printf '#!/system/bin/sh\nMODPATH=${0%%/*}\nMODULES_DIR=${MODPATH}/system/lib/modules\nfor ko_file in ${MODULES_DIR}/*.ko; do\n    [ -f "${ko_file}" ] && insmod "${ko_file}"\ndone\n' > "${MODULE_DIR}/common/service.sh"
+          cp collected/*.ko "${MODULE_DIR}/system/lib/modules/" 2>/dev/null || true
+
+          printf 'id=KSU_Omni_WiFi\nname=KernelSU Omni WiFi Pack\nversion=1.0.0\nversionCode=1\nauthor=MDMisba97khan\ndescription=mac80211+cfg80211+rtl8812au for monitor mode on RMX3834\n' > "${MODULE_DIR}/module.prop"
+
+          printf '#!/system/bin/sh\nMODPATH=${0%%/*}\nMDIR=${MODPATH}/system/lib/modules\nfor ko in cfg80211.ko mac80211.ko 8812au.ko rtl8812au.ko; do\n  [ -f "${MDIR}/${ko}" ] && insmod "${MDIR}/${ko}"\ndone\n' > "${MODULE_DIR}/common/service.sh"
           chmod +x "${MODULE_DIR}/common/service.sh"
+
           printf '#!/system/bin/sh\nMODDIR=${0%%/*}\nchmod 0644 ${MODDIR}/system/lib/modules/*.ko 2>/dev/null\n' > "${MODULE_DIR}/install.sh"
           chmod +x "${MODULE_DIR}/install.sh"
-          printf '#!/system/bin/sh\nMODDIR=${0%%/*}\nfor ko in ${MODDIR}/system/lib/modules/*.ko; do\n    [ -f "$ko" ] && chmod 0644 "$ko"\ndone\n' > "${MODULE_DIR}/post-fs-data.sh"
-          chmod +x "${MODULE_DIR}/post-fs-data.sh"
-          cd "${HOME}/build"
-          zip -r -q KSU_Omni_WiFi_Pack.zip KSU_Omni_WiFi/
-          if [ -f KSU_Omni_WiFi_Pack.zip ]; then
-            echo "✅ ZIP created successfully!"
-            ls -lh KSU_Omni_WiFi_Pack.zip
-            sha256sum KSU_Omni_WiFi_Pack.zip
-          else
-            echo "❌ Failed to create ZIP"
-            exit 1
-          fi
 
-      - name: Upload Build Artifact
+          printf '#!/system/bin/sh\nMODDIR=${0%%/*}\nfor ko in ${MODDIR}/system/lib/modules/*.ko; do\n  [ -f "$ko" ] && chmod 0644 "$ko"\ndone\n' > "${MODULE_DIR}/post-fs-data.sh"
+          chmod +x "${MODULE_DIR}/post-fs-data.sh"
+
+          zip -r -q KSU_Omni_WiFi_Pack.zip KSU_Omni_WiFi/
+          echo "=== ZIP ==="
+          unzip -l KSU_Omni_WiFi_Pack.zip
+          ls -lh KSU_Omni_WiFi_Pack.zip
+
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: KSU_Omni_WiFi_Pack
-          path: ~/build/KSU_Omni_WiFi_Pack.zip
+          path: KSU_Omni_WiFi_Pack.zip
           retention-days: 30
 
-      - name: Create GitHub Release
+      - name: Create Release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v2
         with:
-          files: ~/build/KSU_Omni_WiFi_Pack.zip
+          files: KSU_Omni_WiFi_Pack.zip
           tag_name: v1.0.0-${{ github.run_number }}
-          name: "KSU Omni WiFi Pack v1.0.0 (Build #${{ github.run_number }})"
+          name: "KSU Omni WiFi Pack v1.0.0 (#${{ github.run_number }})"
           body: |
             ## KernelSU Omni WiFi Pack
-            **Device:** Realme Note 50 (RMX3834) • **Kernel:** 5.15.178-android13 • **Android:** 15
-            ### Supported: Alfa AWUS011ACS (RTL8812AU, USB ID: 0bda:c820)
-            ### Features: Monitor Mode ✅ Packet Injection ✅
-            ### Installation: KernelSU-Next → Modules → Install from storage → Reboot → Connect via OTG
-            Built by GitHub Actions • Commit: ${{ github.sha }}
+            **Device:** Realme Note 50 (RMX3834) • **Kernel:** 5.15.178-android13
+            
+            ### Modules included
+            - cfg80211.ko — wireless configuration
+            - mac80211.ko — 802.11 networking stack  
+            - rtl8812au.ko — RTL8812AU USB adapter driver
+            
+            ### Supported: Alfa AWUS011ACS (USB ID: 0bda:c820)
+            ### Features: Monitor Mode, Packet Injection
+            
+            ### Installation
+            1. KernelSU-Next → Modules → Install from storage
+            2. Select KSU_Omni_WiFi_Pack.zip
+            3. Reboot
+            4. Connect adapter via OTG
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

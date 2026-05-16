@@ -14,41 +14,16 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Base Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential bison flex libssl-dev libelf-dev \
             pkg-config python3 git curl wget unzip bc xz-utils \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            clang llvm lld
+          clang --version | head -1
           aarch64-linux-gnu-gcc --version | head -1
-
-      - name: Download AOSP Clang 14.0.7 (r450784d)
-        run: |
-          mkdir -p /tmp/aosp-clang
-          cd /tmp/aosp-clang
-          echo "=== Downloading AOSP Clang r450784d ==="
-          # Download from AOSP prebuilts
-          curl -L --retry 3 --retry-delay 15 \
-            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-14.0.0_r1/clang-r450784d.tar.gz" \
-            -o clang.tar.gz 2>&1 | tail -5
-          
-          if [ -f clang.tar.gz ] && [ $(stat -c%s clang.tar.gz) -gt 1000000 ]; then
-            tar xzf clang.tar.gz
-            echo "=== AOSP Clang extracted ==="
-            ls clang-r450784d/bin/ | head -10
-            /tmp/aosp-clang/clang-r450784d/bin/clang --version | head -3
-          else
-            echo "⚠️ Download failed, trying alternative URL..."
-            # Try GitHub mirror
-            curl -L --retry 3 --retry-delay 15 \
-              "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.7/clang+llvm-14.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz" \
-              -o clang-alt.tar.xz 2>&1 | tail -5
-            if [ -f clang-alt.tar.xz ]; then
-              tar xJf clang-alt.tar.xz
-              ls clang*/
-            fi
-          fi
 
       - name: Clone Kernel Source
         uses: actions/checkout@v4
@@ -69,61 +44,74 @@ jobs:
           tar xzf rtl8812au.tar.gz --strip-components=1 -C drivers/rtl8812au/
           rm rtl8812au.tar.gz
 
-      - name: Build Everything
+      - name: Build Kernel Modules (mac80211 + cfg80211)
         run: |
+          cd kernel
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=/tmp/aosp-clang/clang-r450784d/bin/clang
-          export LD=/tmp/aosp-clang/clang-r450784d/bin/ld.lld
-          export AR=/tmp/aosp-clang/clang-r450784d/bin/llvm-ar
-          export NM=/tmp/aosp-clang/clang-r450784d/bin/llvm-nm
-          export OBJCOPY=/tmp/aosp-clang/clang-r450784d/bin/llvm-objcopy
-          export OBJDUMP=/tmp/aosp-clang/clang-r450784d/bin/llvm-objdump
-          export STRIP=/tmp/aosp-clang/clang-r450784d/bin/llvm-strip
-          export PATH="/tmp/aosp-clang/clang-r450784d/bin:$PATH"
-          
-          echo "=== Toolchain ==="
-          clang --version | head -3
-          
-          # ---- Step 1: Prepare kernel ----
-          cd kernel
-          echo "=== Kernel source ==="
-          ls | head -10
-          
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
+          export NM=llvm-nm
+          export OBJCOPY=llvm-objcopy
+          export OBJDUMP=llvm-objdump
+          export STRIP=llvm-strip
+
           # Use gki_defconfig
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig 2>&1 | tail -3
-          
+
           # Enable mac80211 and cfg80211 as modules
           echo "CONFIG_MAC80211=m" >> .config
           echo "CONFIG_CFG80211=m" >> .config
-          
+
+          # Fix: Remove unsupported compiler flags from the kernel Makefile
+          # The kernel was built with AOSP Clang r450784d which supports flags
+          # that the system Clang doesn't. We need to filter them out.
+          sed -i 's/-ftrivial-auto-var-init=zero//g' Makefile
+          sed -i 's/-fconserve-stack//g' Makefile
+          sed -i 's/-mrecord-mcount//g' Makefile
+          sed -i 's/-fsanitize=bounds-strict//g' Makefile
+          sed -i 's/-enable-trivial-auto-var-init-zero-knowing-it-will-be-removed-from-clang//g' Makefile
+
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -10
-          
-          # ---- Step 2: Build mac80211 ----
+
+          # Build mac80211
           echo "=== Building mac80211 ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             M=net/mac80211 modules 2>&1 | tail -20
-          
-          # ---- Step 3: Build cfg80211 ----
+
+          # Build cfg80211
           echo "=== Building cfg80211 ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             M=net/wireless modules 2>&1 | tail -20
-          
-          echo "=== Kernel modules ==="
+
+          echo "=== Kernel modules built ==="
           find . -name "mac80211.ko" -o -name "cfg80211.ko" 2>/dev/null
-          
           cd ..
-          
-          # ---- Step 4: Build RTL8812AU ----
+
+      - name: Build RTL8812AU.ko
+        run: |
           cd drivers/rtl8812au
-          echo "=== Building RTL8812AU ==="
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=clang
+          export LD=ld.lld
+          export AR=llvm-ar
           export KDIR=${GITHUB_WORKSPACE}/kernel
+
+          # Fix unsupported flags in the driver Makefile too
+          sed -i 's/-fconserve-stack//g' Makefile
+          sed -i 's/-ftrivial-auto-var-init=zero//g' Makefile
+          sed -i 's/-mrecord-mcount//g' Makefile
+          sed -i 's/-fsanitize=bounds-strict//g' Makefile
+
+          echo "=== Building RTL8812AU ==="
           make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             KDIR=${KDIR} \
             EXTRA_CFLAGS="-DCONFIG_WIFI_MONITOR=1 -DCONFIG_CONCURRENT_MODE=1" \
             -j$(nproc) 2>&1 | tail -40
-          
+
           echo "=== RTL8812AU result ==="
           find . -name "*.ko" -type f 2>/dev/null
           cd ..

@@ -25,12 +25,12 @@ jobs:
           clang --version | head -1
           aarch64-linux-gnu-gcc --version | head -1
 
-      - name: Download RTL8812AU Driver Source (aircrack-ng)
+      - name: Download RTL8812AU Driver Source
         run: |
           mkdir -p ~/build/drivers
           cd ~/build/drivers
-          echo "=== Downloading RTL8812AU source (aircrack-ng) ==="
-          curl -L --retry 3 --retry-delay 10 \
+          echo "=== Downloading RTL8812AU source ==="
+          curl -L --retry 3 --retry-delay 10 -H "Accept: application/octet-stream" \
             "https://github.com/aircrack-ng/rtl8812au/archive/refs/heads/master.tar.gz" \
             -o rtl8812au.tar.gz
           mkdir -p rtl8812au
@@ -45,24 +45,20 @@ jobs:
           echo "=== Applying monitor mode patches ==="
           sed -i 's/CONFIG_WIFI_MONITOR = n/CONFIG_WIFI_MONITOR = y/g' Makefile || true
           sed -i 's/# CONFIG_WIFI_MONITOR/CONFIG_WIFI_MONITOR = y/g' Makefile || true
-          grep "CONFIG_WIFI_MONITOR" Makefile || echo "CONFIG_WIFI_MONITOR not found in Makefile"
+          grep "CONFIG_WIFI_MONITOR" Makefile || echo "CONFIG_WIFI_MONITOR not found"
 
-      - name: Download Kernel Source
-        run: |
-          mkdir -p ~/build/kernel_source/kernel
-          cd ~/build/kernel_source
-          echo "=== Downloading kernel source ==="
-          curl -L --retry 3 --retry-delay 10 \
-            "https://github.com/${{ github.repository_owner }}/realme_C51_C53_Note50_C60_C51_N53-AndroidU-kernel-source/archive/refs/heads/main.tar.gz" \
-            -o kernel.tar.gz
-          tar xzf kernel.tar.gz --strip-components=1 -C kernel/
-          rm -f kernel.tar.gz
-          echo "=== Kernel source extracted ==="
-          ls ~/build/kernel_source/kernel/ | head -20
+      - name: Checkout Kernel Source
+        uses: actions/checkout@v4
+        with:
+          repository: MDMisba97khan/realme_C51_C53_Note50_C60_C51_N53-AndroidU-kernel-source
+          path: kernel_source/kernel
+          ref: master
+          fetch-depth: 1
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Prepare Kernel Headers
         run: |
-          cd ~/build/kernel_source/kernel
+          cd kernel_source/kernel
           echo "=== Preparing kernel headers ==="
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
@@ -78,7 +74,7 @@ jobs:
           export ARCH=arm64
           export CROSS_COMPILE=aarch64-linux-gnu-
           export CC=clang
-          export KDIR=~/build/kernel_source/kernel
+          export KDIR=${GITHUB_WORKSPACE}/kernel_source/kernel
           make \
             ARCH=arm64 \
             CROSS_COMPILE=aarch64-linux-gnu- \
@@ -153,22 +149,10 @@ jobs:
           name: "KSU Omni WiFi Pack v1.0.0 (Build #${{ github.run_number }})"
           body: |
             ## KernelSU Omni WiFi Pack
-            
             **Device:** Realme Note 50 (RMX3834) • **Kernel:** 5.15.178-android13 • **Android:** 15
-            
-            ### Supported Adapters
-            - Alfa AWUS011ACS (RTL8812AU, USB ID: 0bda:c820)
-            
-            ### Features
-            - Monitor Mode ✅
-            - Packet Injection ✅
-            
-            ### Installation
-            1. Open KernelSU-Next → Modules → Install from storage
-            2. Select KSU_Omni_WiFi_Pack.zip
-            3. Reboot
-            4. Connect Alfa AWUS011ACS via OTG
-            
+            ### Supported: Alfa AWUS011ACS (RTL8812AU, USB ID: 0bda:c820)
+            ### Features: Monitor Mode ✅ Packet Injection ✅
+            ### Installation: KernelSU-Next → Modules → Install from storage → Reboot → Connect via OTG
             Built by GitHub Actions • Commit: ${{ github.sha }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -14,15 +14,41 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Install Dependencies
+      - name: Install Base Dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential bison flex libssl-dev libelf-dev \
             pkg-config python3 git curl wget unzip bc xz-utils \
-            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            clang-14 llvm-14 lld-14
-          clang-14 --version | head -1
+            gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu
+          aarch64-linux-gnu-gcc --version | head -1
+
+      - name: Download AOSP Clang 14.0.7 (r450784d)
+        run: |
+          mkdir -p /tmp/aosp-clang
+          cd /tmp/aosp-clang
+          echo "=== Downloading AOSP Clang r450784d ==="
+          # Download from AOSP prebuilts
+          curl -L --retry 3 --retry-delay 15 \
+            "https://android.googlesource.com/platform/prebuilts/clang/host/linux-x86/+archive/refs/tags/android-14.0.0_r1/clang-r450784d.tar.gz" \
+            -o clang.tar.gz 2>&1 | tail -5
+          
+          if [ -f clang.tar.gz ] && [ $(stat -c%s clang.tar.gz) -gt 1000000 ]; then
+            tar xzf clang.tar.gz
+            echo "=== AOSP Clang extracted ==="
+            ls clang-r450784d/bin/ | head -10
+            /tmp/aosp-clang/clang-r450784d/bin/clang --version | head -3
+          else
+            echo "⚠️ Download failed, trying alternative URL..."
+            # Try GitHub mirror
+            curl -L --retry 3 --retry-delay 15 \
+              "https://github.com/llvm/llvm-project/releases/download/llvmorg-14.0.7/clang+llvm-14.0.7-x86_64-linux-gnu-ubuntu-18.04.tar.xz" \
+              -o clang-alt.tar.xz 2>&1 | tail -5
+            if [ -f clang-alt.tar.xz ]; then
+              tar xJf clang-alt.tar.xz
+              ls clang*/
+            fi
+          fi
 
       - name: Clone Kernel Source
         uses: actions/checkout@v4
@@ -43,78 +69,64 @@ jobs:
           tar xzf rtl8812au.tar.gz --strip-components=1 -C drivers/rtl8812au/
           rm rtl8812au.tar.gz
 
-      - name: Prepare Kernel + Build mac80211 + cfg80211
+      - name: Build Everything
         run: |
+          export ARCH=arm64
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          export CC=/tmp/aosp-clang/clang-r450784d/bin/clang
+          export LD=/tmp/aosp-clang/clang-r450784d/bin/ld.lld
+          export AR=/tmp/aosp-clang/clang-r450784d/bin/llvm-ar
+          export NM=/tmp/aosp-clang/clang-r450784d/bin/llvm-nm
+          export OBJCOPY=/tmp/aosp-clang/clang-r450784d/bin/llvm-objcopy
+          export OBJDUMP=/tmp/aosp-clang/clang-r450784d/bin/llvm-objdump
+          export STRIP=/tmp/aosp-clang/clang-r450784d/bin/llvm-strip
+          export PATH="/tmp/aosp-clang/clang-r450784d/bin:$PATH"
+          
+          echo "=== Toolchain ==="
+          clang --version | head -3
+          
+          # ---- Step 1: Prepare kernel ----
           cd kernel
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=clang-14
-
-          # Find and use the correct defconfig
-          if [ -f "build.config.gki.aarch64" ]; then
-            # GKI build config - extract the config
-            KERNEL_DEFCONFIG=$(grep "KERNEL_DEFCONFIG" build.config.gki.aarch64 | cut -d= -f2 | tr -d ' ')
-            echo "Using defconfig: ${KERNEL_DEFCONFIG}"
-          fi
-
-          # Try available defconfigs
-          for cfg in gki_defconfig gki_unisoc.aarch64; do
-            if make ARCH=arm64 ${cfg} 2>/dev/null | tail -1; then
-              echo "Config: ${cfg}"
-              break
-            fi
-          done
-
-          # If no defconfig worked, try to use the config from the repo
-          if [ ! -f .config ]; then
-            # Look for any config file
-            find . -name ".config" -o -name "defconfig" 2>/dev/null | head -5
-            # Use sprd diffconfig
-            if [ -d "sprd-diffconfig" ]; then
-              echo "Found sprd-diffconfig"
-              ls sprd-diffconfig/
-            fi
-          fi
-
+          echo "=== Kernel source ==="
+          ls | head -10
+          
+          # Use gki_defconfig
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- gki_defconfig 2>&1 | tail -3
+          
           # Enable mac80211 and cfg80211 as modules
-          if [ -f .config ]; then
-            echo "CONFIG_MAC80211=m" >> .config
-            echo "CONFIG_CFG80211=m" >> .config
-            make ARCH=arm64 olddefconfig 2>&1 | tail -3
-            make ARCH=arm64 modules_prepare 2>&1 | tail -10
-          else
-            echo "WARNING: No .config found, trying direct build"
-          fi
-
-          # Build mac80211
+          echo "CONFIG_MAC80211=m" >> .config
+          echo "CONFIG_CFG80211=m" >> .config
+          
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- olddefconfig 2>&1 | tail -3
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- modules_prepare 2>&1 | tail -10
+          
+          # ---- Step 2: Build mac80211 ----
           echo "=== Building mac80211 ==="
-          make ARCH=arm64 CC=clang-14 CROSS_COMPILE=aarch64-linux-gnu- \
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             M=net/mac80211 modules 2>&1 | tail -20
-
-          # Build cfg80211
+          
+          # ---- Step 3: Build cfg80211 ----
           echo "=== Building cfg80211 ==="
-          make ARCH=arm64 CC=clang-14 CROSS_COMPILE=aarch64-linux-gnu- \
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             M=net/wireless modules 2>&1 | tail -20
-
-          echo "=== Kernel modules built ==="
+          
+          echo "=== Kernel modules ==="
           find . -name "mac80211.ko" -o -name "cfg80211.ko" 2>/dev/null
-
-      - name: Build RTL8812AU.ko
-        run: |
+          
+          cd ..
+          
+          # ---- Step 4: Build RTL8812AU ----
           cd drivers/rtl8812au
-          export ARCH=arm64
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CC=clang-14
-          export KDIR=${GITHUB_WORKSPACE}/kernel
-
           echo "=== Building RTL8812AU ==="
-          make ARCH=arm64 CC=clang-14 CROSS_COMPILE=aarch64-linux-gnu- \
+          export KDIR=${GITHUB_WORKSPACE}/kernel
+          make ARCH=arm64 CC=clang CROSS_COMPILE=aarch64-linux-gnu- \
             KDIR=${KDIR} \
             EXTRA_CFLAGS="-DCONFIG_WIFI_MONITOR=1 -DCONFIG_CONCURRENT_MODE=1" \
             -j$(nproc) 2>&1 | tail -40
-
-          echo "=== RTL8812AU build result ==="
+          
+          echo "=== RTL8812AU result ==="
           find . -name "*.ko" -type f 2>/dev/null
+          cd ..
 
       - name: Collect and Package
         run: |
@@ -124,7 +136,7 @@ jobs:
           find drivers/ -name "*.ko" -exec cp {} collected/ \; 2>/dev/null
           echo "=== Collected .ko files ==="
           ls -la collected/
-          for f in collected/*.ko; do file "$f"; done
+          for f in collected/*.ko; do echo "---"; file "$f"; done
 
           MODULE_DIR="KSU_Omni_WiFi"
           mkdir -p "${MODULE_DIR}/system/lib/modules"

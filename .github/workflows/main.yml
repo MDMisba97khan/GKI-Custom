@@ -19,20 +19,24 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y \
             build-essential bison flex libssl-dev libelf-dev \
-            pkg-config python3 git curl wget unzip bc \
+            pkg-config python3 git curl wget unzip bc xz-utils \
             gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
             clang llvm lld
           clang --version | head -1
           aarch64-linux-gnu-gcc --version | head -1
 
-      - name: Clone RTL8812AU Driver
+      - name: Download RTL8812AU Driver Source
         run: |
-          mkdir -p ~/build/drivers
+          mkdir -p ~/build/drivers/rtl8812au
           cd ~/build/drivers
-          git clone --depth 1 https://github.com/morrownr/8812au-20210629.git rtl8812au
-          cd rtl8812au
-          echo "=== Driver source cloned ==="
-          ls -la
+          echo "=== Downloading RTL8812AU source ==="
+          curl -L --retry 3 --retry-delay 5 \
+            "https://github.com/morrownr/8812au-20210629/archive/refs/heads/main.tar.gz" \
+            -o rtl8812au.tar.gz
+          tar xzf rtl8812au.tar.gz --strip-components=1 -C rtl8812au/
+          rm rtl8812au.tar.gz
+          echo "=== Driver source extracted ==="
+          ls ~/build/drivers/rtl8812au/
 
       - name: Apply Monitor Mode Patches
         run: |
@@ -42,30 +46,19 @@ jobs:
           sed -i 's/# CONFIG_WIFI_MONITOR/CONFIG_WIFI_MONITOR = y/g' Makefile || true
           grep "CONFIG_WIFI_MONITOR" Makefile || echo "CONFIG_WIFI_MONITOR not found in Makefile"
 
-      - name: Clone Kernel Source (for headers)
+      - name: Download Kernel Source
         run: |
           mkdir -p ~/build/kernel_source
           cd ~/build/kernel_source
-          echo "=== Cloning kernel source ==="
-          git clone --depth 1 --branch main \
-            https://github.com/${{ github.repository_owner }}/realme_C51_C53_Note50_C60_C51_N53-AndroidU-kernel-source.git \
-            kernel 2>&1 | tail -5
-          echo "=== Kernel source cloned ==="
+          echo "=== Downloading kernel source ==="
+          curl -L --retry 3 --retry-delay 5 \
+            "https://github.com/${{ github.repository_owner }}/realme_C51_C53_Note50_C60_C51_N53-AndroidU-kernel-source/archive/refs/heads/main.tar.gz" \
+            -o kernel.tar.gz
+          tar xzf kernel.tar.gz --strip-components=1 -C kernel/ 2>/dev/null || \
+          { mkdir -p kernel && tar xzf kernel.tar.gz --strip-components=1 -C kernel/; }
+          rm -f kernel.tar.gz
+          echo "=== Kernel source extracted ==="
           ls ~/build/kernel_source/kernel/ | head -20
-
-      - name: Extract Kernel Config
-        run: |
-          cd ~/build/kernel_source/kernel
-          echo "=== Extracting kernel config ==="
-          if [ -f "build.config.gki.aarch64" ]; then
-            echo "Found build.config.gki.aarch64"
-            cat build.config.gki.aarch64
-          fi
-          if [ -d "sprd-diffconfig" ]; then
-            echo "Found sprd-diffconfig directory"
-            ls sprd-diffconfig/
-          fi
-          find . -name "*defconfig*" -type f 2>/dev/null | head -10
 
       - name: Prepare Kernel Headers
         run: |
@@ -92,7 +85,7 @@ jobs:
             CC=clang \
             KDIR=${KDIR} \
             EXTRA_CFLAGS="-DCONFIG_WIFI_MONITOR=1 -DCONFIG_CONCURRENT_MODE=1" \
-            -j$(nproc) 2>&1 | tail -50
+            -j$(nproc) 2>&1 | tail -60
           echo "=== Build complete ==="
           if [ -f "8812au.ko" ]; then
             echo "✅ 8812au.ko built successfully!"
@@ -103,9 +96,8 @@ jobs:
             ls -lh rtl8812au.ko
             file rtl8812au.ko
           else
-            echo "❌ No .ko file found. Listing directory:"
+            echo "❌ No .ko file found"
             find . -name "*.ko" -type f 2>/dev/null
-            ls -la *.ko 2>/dev/null || echo "No .ko files"
           fi
 
       - name: Package KernelSU Module
